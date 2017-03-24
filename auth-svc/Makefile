@@ -20,5 +20,5 @@ docker-build: $(DOCKERFILE)
 
 .PHONY:
 clean:
-	if [ -f ${BIN_DIR}/${BINARY} ] ; then rm ${BIN_DIR}/${BINARY} ; fi
+	if [ -d ${BIN_DIR} ] ; then rm -r ${BIN_DIR} ; fi
 	if [ -f ${PROTO_DIR}/*.pb.go ] ; then rm ${PROTO_DIR}/*.pb.go ; fi
