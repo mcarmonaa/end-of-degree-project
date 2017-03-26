@@ -4,35 +4,131 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+
+	"github.com/mcarmonaa/eodp/auth-svc/auth"
+	"github.com/mcarmonaa/eodp/message"
+
+	"encoding/json"
+
+	"golang.org/x/net/context"
+	"google.golang.org/grpc"
 )
 
 var (
+	// TODO: on deployment, service address must be taken from net.LookUpHost("servicename")
 	authSvc    = os.Getenv("AUTH_SVC")
 	usersSVC   = os.Getenv("USERS_SVC")
 	devicesSVC = os.Getenv("DEVICES_SVC")
+	// TODO: TLS certs?
+	dialOptions = []grpc.DialOption{grpc.WithInsecure()}
 )
 
-// GetSalt handles incoming HTTP GET requests to /login?mail=mail@domain. It returns the salt to get
+// GetSalt handles incoming HTTP GET requests to /salt?mail=mail@domain. It returns the salt to get
 // the derivated key for the mail's owner password.
 func GetSalt(w http.ResponseWriter, r *http.Request) {
-	// /login?mail=mail@domain
 	mail := r.FormValue("mail")
 	if mail == "" {
 		http.Error(w, "", http.StatusBadRequest)
 		return
 	}
 
-	fmt.Fprintln(w, mail)
+	conn, err := grpc.Dial(authSvc, dialOptions...)
+	if err != nil {
+		logAndSetHTTPErrorCode(w, err)
+		return
+	}
+	defer conn.Close()
+
+	client := auth.NewAuthClient(conn)
+	saltRequest := &auth.SaltRequest{Mail: mail}
+	reply, err := client.GetSalt(context.Background(), saltRequest)
+	if err != nil {
+		logAndSetHTTPErrorCode(w, err)
+		return
+	}
+
+	salt := &message.AuthUser{Salt: reply.GetSalt()}
+	response, err := json.Marshal(salt)
+	if err != nil {
+		logAndSetHTTPErrorCode(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, string(response))
 }
 
 // Login handles incoming HTTP POST requests to /login. It authenticates a user in the system and returns a JWE token.
 func Login(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintln(w, r.RequestURI)
+	loginMessage := &message.Encrypted{}
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(loginMessage); err != nil {
+		logAndSetHTTPErrorCode(w, err)
+		return
+	}
+
+	conn, err := grpc.Dial(authSvc, dialOptions...)
+	if err != nil {
+		logAndSetHTTPErrorCode(w, err)
+		return
+	}
+	defer conn.Close()
+
+	client := auth.NewAuthClient(conn)
+	loginRequest := &auth.LoginRequest{
+		Mail:    loginMessage.Mail,
+		Iv:      loginMessage.IVector,
+		Payload: loginMessage.Payload,
+	}
+
+	reply, err := client.Login(context.Background(), loginRequest)
+	if err != nil {
+		logAndSetHTTPErrorCode(w, err)
+		return
+	}
+
+	response := &message.Encrypted{
+		IVector: reply.GetIv(),
+		Payload: reply.GetPayload(),
+	}
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, response)
 }
 
 // AddUser handles incoming HTTP POST requests to /register. It creates a new user in the system.
 func AddUser(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintln(w, r.RequestURI)
+	newUser := &message.AuthUser{}
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(newUser); err != nil {
+		logAndSetHTTPErrorCode(w, err)
+		return
+	}
+
+	conn, err := grpc.Dial(authSvc, dialOptions...)
+	if err != nil {
+		logAndSetHTTPErrorCode(w, err)
+		return
+	}
+	defer conn.Close()
+
+	client := auth.NewAuthClient(conn)
+	regRequest := &auth.RegisterRequest{Mail: newUser.Mail, Password: newUser.Password}
+	reply, err := client.Register(context.Background(), regRequest)
+	if err != nil {
+		logAndSetHTTPErrorCode(w, err)
+		return
+	}
+
+	salt := &message.AuthUser{Salt: reply.GetSalt()}
+	response, err := json.Marshal(salt)
+	if err != nil {
+		logAndSetHTTPErrorCode(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	fmt.Fprint(w, string(response))
 }
 
 // GetUser handles incoming HTTP GET requests to /users/{id:[0-9]+}. It searchs for a user and returns its associated data.

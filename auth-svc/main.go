@@ -31,6 +31,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer db.Close()
 
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -38,8 +39,12 @@ func main() {
 	}
 
 	server := grpc.NewServer()
-	auth.RegisterAuthServer(server, auth.NewAuthSvc(db))
+	service, err := auth.NewAuthSvc(db)
+	if err != nil {
+		log.Fatal(err)
+	}
 
+	auth.RegisterAuthServer(server, service)
 	log.Println("Listening...")
 	log.Fatal(server.Serve(lis))
 }

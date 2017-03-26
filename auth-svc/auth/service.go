@@ -1,32 +1,125 @@
 package auth
 
 import (
+	"fmt"
+	"log"
+
 	"github.com/jinzhu/gorm"
 	"golang.org/x/net/context"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 )
 
+const (
+	svc             = "auth-svc: "
+	alreadyExists   = svc + "already registered user "
+	internal        = svc + "internal error"
+	notFound        = svc + "not found user "
+	unauthenticated = svc + "coulnd't authenticate user "
+)
+
+// Service represents the service exposes by auth-svc.
 type Service struct {
 	nonces *nonces
 	db     *gorm.DB
 }
 
-func NewAuthSvc(db *gorm.DB) *Service {
+// NewAuthSvc creates a new Service connected against the given db creating a table "users" with the type Users as a model.
+func NewAuthSvc(db *gorm.DB) (*Service, error) {
+	if err := db.AutoMigrate(&User{}).Error; err != nil {
+		return nil, err
+	}
+
+	if err := db.Model(&User{}).AddUniqueIndex("idx_user_mail", "mail").Error; err != nil {
+		return nil, err
+	}
+
 	return &Service{
 		nonces: newNonces(100),
 		db:     db,
+	}, nil
+
+}
+
+// Register creates a new user if the given mail doesn't exist in the database, otherwise it returns an error status.
+func (s *Service) Register(c context.Context, r *RegisterRequest) (*RegisterReply, error) {
+	mail := r.GetMail()
+	if inDB(s.db, mail) {
+		return nil, grpc.Errorf(codes.AlreadyExists, alreadyExists+"%q", mail)
 	}
 
+	salt, err := generateSalt()
+	if err != nil {
+		log.Println("register: couldn't generate salt: ", err)
+		return nil, grpc.Errorf(codes.Internal, internal)
+	}
+
+	passKDF, err := generatePassword(r.GetPassword(), salt)
+	if err != nil {
+		log.Printf("register: couldn't create user %q: %v\n", mail, err)
+		return nil, grpc.Errorf(codes.Internal, internal)
+	}
+
+	if err := s.db.Create(&User{Mail: mail, Password: passKDF, Salt: salt}).Error; err != nil {
+		log.Printf("register: couldn't create user %q: %v\n", mail, err)
+		return nil, grpc.Errorf(codes.Internal, internal)
+	}
+
+	return &RegisterReply{Salt: salt}, nil
 }
 
-func (s *Service) Register(context.Context, *RegisterRequest) (*RegisterReply, error) {
+// GetSalt returns the salt associated to the given mail.
+func (s *Service) GetSalt(c context.Context, r *SaltRequest) (*SaltReply, error) {
+	mail := r.GetMail()
+	if !inDB(s.db, mail) {
+		return nil, grpc.Errorf(codes.NotFound, notFound+"%q", mail)
+	}
 
-	return nil, nil
+	var user User
+	if err := s.db.Select("salt").Where("mail = ?", mail).First(&user).Error; err != nil {
+		log.Printf("salt: couldn't get salt: %v\n", err)
+		return nil, grpc.Errorf(codes.Internal, internal)
+	}
+
+	salt := user.Salt
+	return &SaltReply{Salt: salt}, nil
 }
 
-func (s *Service) GetSalt(context.Context, *SaltRequest) (*SaltReply, error) {
-	return nil, nil
-}
+// Login checks the given mail and the encrypted message(base64 encoded) with the user's kdf are correct and returns a JWE for the user in a
+// encrypted message ciphered with the shared key send by the user.
+//
+// All encrypted data (with Ks or Ku) use AES256-GCM.
+//
+// C generates Ks randomly (An AES256 key).
+//
+// C request for its salt: C -> S GetSalt(mail)
+// S reply with user's salt: S -> C salt
+//
+// C request for login: C -> S Login(mail, IV, Ku(TS, nonce, Ks) with Authenticated Data = mail) (the payload received would be plained in base64).
+// if login success:
+// S reply with a JWE: S -> C OK, IV, Ks(TS', nonce + 1, JWE) (IV and payload will be returns plained in base64).
+// if login fails:
+// S reply error: S -> C Error, Authentication failed
+func (s *Service) Login(c context.Context, r *LoginRequest) (*LoginReply, error) {
+	mail := r.GetMail()
+	if !inDB(s.db, mail) {
+		return nil, grpc.Errorf(codes.NotFound, notFound+"%q", mail)
+	}
 
-func (s *Service) Login(context.Context, *LoginRequest) (*LoginReply, error) {
-	return nil, nil
+	var user User
+	// if err := s.db.Select("password, salt").Where("mail = ?", mail).First(&user).Error; err != nil {
+	if err := s.db.Where("mail = ?", mail).First(&user).Error; err != nil {
+		log.Printf("login: couldn't get password and salt: %v\n", err)
+		return nil, grpc.Errorf(codes.Internal, internal)
+	}
+
+	loginInfo, err := decryptLogin(r.GetIv(), r.GetPayload(), &user)
+	if err != nil {
+		log.Println(err)
+		return nil, grpc.Errorf(codes.Unauthenticated, unauthenticated+"%q", mail)
+	}
+
+	fmt.Printf("%#v\n", loginInfo)
+
+	return &LoginReply{}, nil
 }
