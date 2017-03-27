@@ -1,14 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 
-	"github.com/mcarmonaa/eodp/auth-svc/auth"
-	"github.com/mcarmonaa/eodp/message"
-
-	"encoding/json"
+	"github.com/mcarmonaa/end-of-degree-project/auth-svc/auth"
+	"github.com/mcarmonaa/end-of-degree-project/message"
 
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"

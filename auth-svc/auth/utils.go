@@ -6,15 +6,15 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-
-	"golang.org/x/crypto/pbkdf2"
-
-	"fmt"
-
 	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/mcarmonaa/end-of-degree-project/auth-svc/nonces"
+	"github.com/mcarmonaa/end-of-degree-project/message"
 
 	"github.com/jinzhu/gorm"
-	"github.com/mcarmonaa/eodp/message"
+	"golang.org/x/crypto/pbkdf2"
 )
 
 func inDB(db *gorm.DB, mail string) bool {
@@ -59,38 +59,49 @@ func generatePassword(pass, salt string) (string, error) {
 	return derivatedKey64, nil
 }
 
-func decryptLogin(initVector, payload string, user *User) (*message.Login, error) {
-	iv, err := base64.StdEncoding.DecodeString(initVector)
+func decryptAndValidate(initVector, payload, key, authData string, blackList *nonces.Nonces) (*message.Widespread, error) {
+	message, err := decryptPayload(initVector, payload, key, authData)
 	if err != nil {
-		return nil, fmt.Errorf("login: couldn't decode base64 iv: %v", err)
+		return nil, err
 	}
 
-	data, err := base64.StdEncoding.DecodeString(payload)
-	if err != nil {
-		return nil, fmt.Errorf("login: couldn't decode base64 payload: %v", err)
-	}
-
-	pass, err := base64.StdEncoding.DecodeString(user.Password)
-	if err != nil {
-		return nil, fmt.Errorf("login: couldn't decode base64 password: %v", err)
-	}
-
-	buf, err := decryptPayload(iv, data, pass, []byte(user.Mail))
-	if err != nil {
-		return nil, fmt.Errorf("login: couldn't decrypt payload: %v", err)
-	}
-
-	fmt.Println(string(buf))
-
-	message := &message.Login{}
-	if err := json.Unmarshal(buf, message); err != nil {
-		return nil, fmt.Errorf("login: couldn't unmarshal login message: %v", err)
+	if err := validateMessage(message, blackList); err != nil {
+		return nil, err
 	}
 
 	return message, nil
 }
 
-func decryptPayload(iv, data, key, authData []byte) ([]byte, error) {
+func decryptPayload(ivBase64, payloadBase64, keyBase64, authData string) (*message.Widespread, error) {
+	iv, err := base64.StdEncoding.DecodeString(ivBase64)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := base64.StdEncoding.DecodeString(payloadBase64)
+	if err != nil {
+		return nil, err
+	}
+
+	key, err := base64.StdEncoding.DecodeString(keyBase64)
+	if err != nil {
+		return nil, err
+	}
+
+	buf, err := decryptData(iv, data, key, []byte(authData))
+	if err != nil {
+		return nil, err
+	}
+
+	message := &message.Widespread{}
+	if err := json.Unmarshal(buf, message); err != nil {
+		return nil, err
+	}
+
+	return message, nil
+}
+
+func decryptData(iv, data, key, authData []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -107,4 +118,19 @@ func decryptPayload(iv, data, key, authData []byte) ([]byte, error) {
 	}
 
 	return decryptedData, nil
+}
+
+func validateMessage(message *message.Widespread, blackList *nonces.Nonces) error {
+	const windowTime = 15
+	elapsedTS := time.Now().Unix() - message.Timestamp
+
+	if elapsedTS < 0 || elapsedTS > windowTime {
+		return fmt.Errorf("invalid timestamp")
+	}
+
+	if !blackList.CheckAndAdd(message.Nonce) {
+		return fmt.Errorf("invalid nonce")
+	}
+
+	return nil
 }

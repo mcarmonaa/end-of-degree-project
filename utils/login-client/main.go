@@ -16,7 +16,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/mcarmonaa/eodp/message"
+	"github.com/mcarmonaa/end-of-degree-project/message"
 
 	"golang.org/x/crypto/pbkdf2"
 )
@@ -40,25 +40,31 @@ func main() {
 		log.Fatal(err)
 	}
 
-	loginMessage := &message.Login{
-		Timestamp: time.Duration(time.Now().UTC().Unix()),
-		Nonce:     nonce,
-		SharedKey: sharedKey,
-	}
-
+	loginMessage := &message.Login{SharedKey: sharedKey}
 	loginJSON, err := json.Marshal(loginMessage)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	log.Println(string(loginJSON))
+	widespreadMessage := &message.Widespread{
+		Timestamp: time.Now().Unix(),
+		Nonce:     nonce,
+		Content:   string(loginJSON),
+	}
+
+	widespreadJSON, err := json.Marshal(widespreadMessage)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Println(string(widespreadJSON))
 
 	keyDF, err := getKDF(mail, pass)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	encryptedMessage, err := encryptLoginMessage([]byte(loginJSON), keyDF, []byte(mail))
+	encryptedMessage, err := encryptLoginMessage(widespreadJSON, keyDF, []byte(mail))
 	if err != nil {
 		log.Fatal(err)
 	}

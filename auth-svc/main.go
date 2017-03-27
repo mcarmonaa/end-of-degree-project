@@ -6,7 +6,7 @@ import (
 	"net"
 	"os"
 
-	"github.com/mcarmonaa/eodp/auth-svc/auth"
+	"github.com/mcarmonaa/end-of-degree-project/auth-svc/auth"
 
 	"github.com/jinzhu/gorm"
 	_ "github.com/jinzhu/gorm/dialects/postgres"

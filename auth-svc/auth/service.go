@@ -1,8 +1,12 @@
 package auth
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
+
+	"github.com/mcarmonaa/end-of-degree-project/auth-svc/nonces"
+	"github.com/mcarmonaa/end-of-degree-project/message"
 
 	"github.com/jinzhu/gorm"
 	"golang.org/x/net/context"
@@ -20,8 +24,8 @@ const (
 
 // Service represents the service exposes by auth-svc.
 type Service struct {
-	nonces *nonces
-	db     *gorm.DB
+	blackList *nonces.Nonces
+	db        *gorm.DB
 }
 
 // NewAuthSvc creates a new Service connected against the given db creating a table "users" with the type Users as a model.
@@ -35,8 +39,8 @@ func NewAuthSvc(db *gorm.DB) (*Service, error) {
 	}
 
 	return &Service{
-		nonces: newNonces(100),
-		db:     db,
+		blackList: nonces.New(100),
+		db:        db,
 	}, nil
 
 }
@@ -88,7 +92,7 @@ func (s *Service) GetSalt(c context.Context, r *SaltRequest) (*SaltReply, error)
 // Login checks the given mail and the encrypted message(base64 encoded) with the user's kdf are correct and returns a JWE for the user in a
 // encrypted message ciphered with the shared key send by the user.
 //
-// All encrypted data (with Ks or Ku) use AES256-GCM.
+// All encrypted data (with Ks or Ku) use AES256-GCM algorithm.
 //
 // C generates Ks randomly (An AES256 key).
 //
@@ -107,19 +111,24 @@ func (s *Service) Login(c context.Context, r *LoginRequest) (*LoginReply, error)
 	}
 
 	var user User
-	// if err := s.db.Select("password, salt").Where("mail = ?", mail).First(&user).Error; err != nil {
 	if err := s.db.Where("mail = ?", mail).First(&user).Error; err != nil {
 		log.Printf("login: couldn't get password and salt: %v\n", err)
 		return nil, grpc.Errorf(codes.Internal, internal)
 	}
 
-	loginInfo, err := decryptLogin(r.GetIv(), r.GetPayload(), &user)
+	widespread, err := decryptAndValidate(r.GetIv(), r.GetPayload(), user.Password, user.Mail, s.blackList)
 	if err != nil {
-		log.Println(err)
+		log.Printf("login: couldn't retrieve request data: %v\n", err)
 		return nil, grpc.Errorf(codes.Unauthenticated, unauthenticated+"%q", mail)
 	}
 
-	fmt.Printf("%#v\n", loginInfo)
+	var loginInfo message.Login
+	if err := json.Unmarshal([]byte(widespread.Content), &loginInfo); err != nil {
+		log.Printf("login: couldn't retrieve login message data: %v\n", err)
+		return nil, grpc.Errorf(codes.Unauthenticated, unauthenticated+"%q", mail)
+	}
+
+	fmt.Printf("%T %#[1]v\n", loginInfo)
 
 	return &LoginReply{}, nil
 }

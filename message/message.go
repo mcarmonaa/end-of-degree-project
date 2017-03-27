@@ -1,7 +1,5 @@
 package message
 
-import "time"
-
 // AuthUser is the message sent by a client to register a new user, or request for its salt. Server replies with
 // this message for request salt too. Salt field is plained as a base64.
 // {
@@ -28,10 +26,15 @@ type Encrypted struct {
 	Payload string `json:"payload"`
 }
 
+// Widespread is the accommodation for any message.
+type Widespread struct {
+	Timestamp int64  `json:"timestamp"`
+	Nonce     uint64 `json:"nonce"`
+	Content   string `json:"content"`
+}
+
 // Login is the message sent from a client to be logged in the system. It will send as a message.Encrypte's payload ciphered with the
 // user's kdf(password, salt)
 type Login struct {
-	Timestamp time.Duration `json:"timestamp"`
-	Nonce     uint64        `json:"nonce"`
-	SharedKey string        `json:"ks"`
+	SharedKey string `json:"ks"`
 }
